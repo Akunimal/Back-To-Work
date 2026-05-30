@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+uv.lock
+
+# Local config / OS
+backtowork.toml
+.DS_Store
+Thumbs.db
+
+# Project scratch
+_zip_extract/
+*.zip
