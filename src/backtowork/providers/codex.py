@@ -167,5 +167,6 @@ class CodexProvider(Provider):
 
         return QuotaState(
             Status.UNKNOWN,
-            detail="no rate-limit snapshot found in latest Codex session (may be null)",
+            detail="Codex doesn't save reset time locally (upstream bug #14880) — "
+            "use --reset for an exact countdown",
         )

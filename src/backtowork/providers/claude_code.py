@@ -1,64 +1,66 @@
-"""Claude Code provider — zero-cost, local-only refill estimate.
+"""Claude Code provider — zero-cost, local-only, EXACT limit detection.
 
 It NEVER calls the Anthropic API (that would burn usage). Instead it reads Claude
-Code's own session transcripts on disk and estimates the rolling 5-hour usage
-block, the same way community tools like `ccusage` do.
+Code's own session transcripts on disk and looks for the explicit usage-limit
+marker the CLI writes when it actually gets rate-limited.
 
 How it works:
   - Claude Code writes one JSONL transcript per session under
-    ~/.claude/projects/**/*.jsonl. Every line carries an ISO-8601 "timestamp".
-  - Anthropic usage runs in 5-hour blocks that begin at the hour of the first
-    message. A gap longer than the block length starts a fresh block.
-  - So the current block's refill time is roughly:  block_start + 5h.
+    ~/.claude/projects/**/*.jsonl.
+  - When (and only when) you hit the rolling usage limit, Claude Code records a
+    message whose text is:  `Claude Code usage limit reached|<unix_epoch>`
+    where <unix_epoch> is the exact reset time in seconds.
+  - We scan recent transcripts for that marker and report the most recent one.
+    If its reset time is still in the future -> EXHAUSTED with the exact reset.
+    Otherwise (no marker, or it already elapsed) -> AVAILABLE.
 
-This is an ESTIMATE of the block boundary, not a live quota reading. When you
-hit the limit before the block ends, override with `backtowork watch --reset <when>`
-or a `command` provider. See README.
+This is EXACT (not a 5-hour estimate): the reset time comes straight from the
+marker Claude Code itself wrote. No API call, no guessing from activity.
+
+Key fix vs. older versions: having recent activity does NOT mean you're out of
+credit. Only the explicit limit marker means exhausted.
 
 Options (all optional):
-    block_hours   = 5      # length of the usage block
-    idle_minutes  = 300    # no activity for this long -> consider the window fresh
+    lookback_hours = 6     # only scan transcripts touched within this window
 """
 
 from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..models import QuotaState, Status
 from .base import Provider, register
 
-_TS = re.compile(r'"timestamp"\s*:\s*"([^"]+)"')
+# The marker Claude Code writes on a real rate-limit, e.g.
+#   Claude Code usage limit reached|1748736000
+# Be liberal: match the phrase followed by a pipe and a 10–13 digit epoch.
+_MARKER = re.compile(r"usage limit reached\|(\d{10,13})", re.IGNORECASE)
 
 
 def _claude_home() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
 
 
-def _parse_ts(raw: str) -> datetime | None:
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+def _epoch_to_dt(raw: str) -> datetime:
+    val = int(raw)
+    if val > 1_000_000_000_000:  # milliseconds
+        val //= 1000
+    return datetime.fromtimestamp(val, tz=timezone.utc)
 
 
-def _floor_to_hour(dt: datetime) -> datetime:
-    return dt.replace(minute=0, second=0, microsecond=0)
+def _latest_marker(projects: Path, lookback_secs: float, now: datetime) -> datetime | None:
+    """Return the reset time from the most recently written usage-limit marker
+    across recent transcripts, or None if none found."""
+    cutoff = now.timestamp() - lookback_secs
+    best_mtime = -1.0
+    best_reset: datetime | None = None
 
-
-def _collect_timestamps(projects: Path, window: timedelta, now: datetime) -> list[datetime]:
-    """Gather recent timestamps cheaply: skip files untouched within the window,
-    then regex-scan the rest (no per-line JSON parse)."""
-    cutoff = now - window
-    stamps: list[datetime] = []
     for jsonl in projects.rglob("*.jsonl"):
         try:
-            mtime = datetime.fromtimestamp(jsonl.stat().st_mtime, tz=timezone.utc)
+            mtime = jsonl.stat().st_mtime
         except OSError:
             continue
         if mtime < cutoff:
@@ -67,12 +69,19 @@ def _collect_timestamps(projects: Path, window: timedelta, now: datetime) -> lis
             text = jsonl.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        for m in _TS.findall(text):
-            ts = _parse_ts(m)
-            if ts is not None and ts >= cutoff:
-                stamps.append(ts)
-    stamps.sort()
-    return stamps
+        matches = _MARKER.findall(text)
+        if not matches:
+            continue
+        # Within a file the relevant marker is the last one; across files prefer
+        # the most recently modified transcript.
+        if mtime > best_mtime:
+            try:
+                best_reset = _epoch_to_dt(matches[-1])
+                best_mtime = mtime
+            except (ValueError, OverflowError, OSError):
+                continue
+
+    return best_reset
 
 
 @register("claude_code")
@@ -86,33 +95,17 @@ class ClaudeCodeProvider(Provider):
                 detail=f"{projects} not found; is Claude Code installed here?",
             )
 
-        block = timedelta(hours=float(self.options.get("block_hours", 5)))
-        idle = timedelta(minutes=float(self.options.get("idle_minutes", 300)))
+        lookback = float(self.options.get("lookback_hours", 6)) * 3600
         now = datetime.now(timezone.utc)
 
-        # Look back two blocks so we can find the start of the current cluster.
-        stamps = _collect_timestamps(projects, window=2 * block, now=now)
-        if not stamps:
-            return QuotaState(Status.AVAILABLE, detail="no recent activity")
-
-        latest = stamps[-1]
-        if now - latest > idle:
-            return QuotaState(Status.AVAILABLE, detail="idle; window is fresh")
-
-        # Walk backward to the start of the current contiguous block: stop at the
-        # first gap longer than one block length.
-        block_start = latest
-        for prev in reversed(stamps[:-1]):
-            if block_start - prev > block:
-                break
-            block_start = prev
-
-        reset_at = _floor_to_hour(block_start) + block
+        reset_at = _latest_marker(projects, lookback, now)
+        if reset_at is None:
+            return QuotaState(Status.AVAILABLE, detail="no usage-limit marker")
         if now >= reset_at:
-            return QuotaState(Status.AVAILABLE, detail="block elapsed")
+            return QuotaState(Status.AVAILABLE, detail="limit window elapsed")
 
         return QuotaState(
             Status.EXHAUSTED,
             reset_at=reset_at,
-            detail="5h block (estimate) · --reset to override",
+            detail="usage limit reached (exact reset)",
         )
