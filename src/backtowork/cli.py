@@ -228,7 +228,51 @@ def _add_watch_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-toast", action="store_true", help="don't show a desktop toast")
 
 
+def _force_utf8() -> None:
+    """Windows legacy consoles default to cp1252, which can't encode the box-art
+    and emoji glyphs we print (raises UnicodeEncodeError). Switch the standard
+    streams to UTF-8 and flip the console output code page to UTF-8 (65001) so
+    the banner and big countdown render."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfig = getattr(stream, "reconfigure", None)
+        if reconfig is not None:
+            try:
+                reconfig(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+            ctypes.windll.kernel32.SetConsoleCP(65001)
+        except Exception:
+            pass
+
+
+def _make_console() -> Console:
+    """On Windows, bypass the win32 console API (which encodes via the active code
+    page and chokes on our Unicode art). We pass rich an explicit UTF-8 TextIOWrapper
+    so it never touches the legacy renderer, regardless of terminal type or whether
+    the binary is frozen by PyInstaller."""
+    if sys.platform.startswith("win"):
+        import io
+
+        try:
+            buf = getattr(sys.stdout, "buffer", None)
+            if buf is not None:
+                safe = io.TextIOWrapper(
+                    buf, encoding="utf-8", errors="replace", line_buffering=True
+                )
+                return Console(file=safe, legacy_windows=False)
+        except Exception:
+            pass
+        return Console(legacy_windows=False)
+    return Console()
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8()
     parser = argparse.ArgumentParser(
         prog="backtowork",
         description="Tells you (with a sound) when your coder's credit comes back.",
@@ -245,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_watch_flags(p_test)
 
     args = parser.parse_args(argv)
-    console = Console()
+    console = _make_console()
     cmd = args.cmd or "watch"
     if cmd == "watch" and args.cmd is None:
         # default subcommand: fill in watch's flag defaults

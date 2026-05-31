@@ -22,3 +22,8 @@ Thumbs.db
 # Project scratch
 _zip_extract/
 *.zip
+
+# PyInstaller
+*.spec
+dist/
+build/
