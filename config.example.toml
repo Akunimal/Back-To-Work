@@ -10,20 +10,20 @@ play_sound    = true   # play a sound when credit comes back
 show_toast    = true   # show a desktop toast (needs the `toast` extra on Windows)
 # sound       = "C:/path/to/your.wav"   # override the bundled chime
 
-# --- Claude Code (zero-cost, local estimate) ---------------------------------
-# Reads Claude Code's own session transcripts under ~/.claude/projects and
-# ESTIMATES the rolling 5-hour usage block. Never calls the Anthropic API.
-# It's an estimate of the block boundary — use `--reset` for an exact time.
+# --- Claude Code (zero-cost, local exact marker) -----------------------------
+# Reads Claude Code's own session transcripts under ~/.claude/projects and looks
+# for the explicit usage-limit marker written by the CLI. Never calls the
+# Anthropic API. Recent activity alone is not treated as exhausted.
 [[provider]]
 kind = "claude_code"
 name = "claude"
-# block_hours  = 5
-# idle_minutes = 300
+# lookback_hours = 6
 
 # --- Codex (zero-cost, local, exact when available) --------------------------
 # The OpenAI Codex CLI caches the server's own rate-limit snapshot into its
 # session logs under ~/.codex/sessions (override with $CODEX_HOME). We read it
-# locally — never calling any API. Some Codex versions log it as null until the
+# locally — never calling any model API. Current Codex builds write `resets_at`;
+# older builds wrote `resets_in_seconds`. Some builds log it as null until the
 # server sends one; then this returns "unknown" and you can fall back to manual.
 # [[provider]]
 # kind = "codex"

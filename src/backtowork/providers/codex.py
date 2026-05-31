@@ -8,15 +8,15 @@ Where Codex writes it:
   ~/.codex/sessions/YYYY/MM/DD/rollout-<...>.jsonl   (override with $CODEX_HOME)
 Each line is JSON with a top-level "timestamp". Token-count events embed a
 `rate_limits` object with `primary` (the short ~5h window) and `secondary`
-(weekly) windows, each carrying `used_percent` and `resets_in_seconds`.
+(weekly) windows. Current Codex builds write each window's `used_percent` and
+absolute `resets_at` epoch; older builds wrote relative `resets_in_seconds`.
 
 We tolerantly scan the most recent rollout for the latest object that contains
-`resets_in_seconds`, prefer the `primary` window, and compute:
-    reset_at = <line timestamp> + resets_in_seconds
+either reset field, prefer the `primary` window, and compute:
+    reset_at = epoch(resets_at) OR <line timestamp> + resets_in_seconds
 
-Note: some Codex versions log `rate_limits` as null until the server sends a
-snapshot (see openai/codex#14880). When nothing usable is found we return
-UNKNOWN with a hint to use a `manual`/`command` provider instead.
+When nothing usable is found we return UNKNOWN with a hint to run Codex once or
+use a `manual`/`command` provider instead.
 
 Options (all optional):
     threshold_percent = 95          # treat the window as exhausted at/above this
@@ -51,27 +51,47 @@ def _parse_ts(raw) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-def _find_window(obj, prefer: str):
-    """Recursively locate a rate-limit window dict (one with 'resets_in_seconds').
+def _epoch_to_dt(raw: float) -> datetime:
+    if raw > 1_000_000_000_000:  # milliseconds
+        raw /= 1000
+    return datetime.fromtimestamp(raw, tz=timezone.utc)
 
-    Returns (used_percent, resets_in_seconds) or None. Prefers a window reached
+
+def _window_reset_at(node: dict, line_ts: datetime) -> datetime | None:
+    resets_at = node.get("resets_at")
+    if isinstance(resets_at, (int, float)):
+        try:
+            return _epoch_to_dt(float(resets_at))
+        except (OSError, OverflowError, ValueError):
+            return None
+
+    resets_in = node.get("resets_in_seconds")
+    if isinstance(resets_in, (int, float)):
+        return line_ts + timedelta(seconds=float(resets_in))
+
+    return None
+
+
+def _find_window(obj, prefer: str, line_ts: datetime):
+    """Recursively locate a rate-limit window dict.
+
+    Returns (used_percent, reset_at) or None. Prefers a window reached
     via a key named `prefer` (e.g. 'primary'); otherwise falls back to the window
     with the SMALLEST reset (the short rolling window)."""
-    best = None       # (used_percent, resets_in_seconds)
-    preferred = None  # (used_percent, resets_in_seconds)
+    best = None       # (used_percent, reset_at)
+    preferred = None  # (used_percent, reset_at)
 
     def visit(node, under_prefer: bool):
         nonlocal best, preferred
         if isinstance(node, dict):
-            secs_raw = node.get("resets_in_seconds")
-            if isinstance(secs_raw, (int, float)):
+            reset_at = _window_reset_at(node, line_ts)
+            if reset_at is not None:
                 pct = node.get("used_percent")
                 pct = float(pct) if isinstance(pct, (int, float)) else None
-                secs = float(secs_raw)
                 if under_prefer and preferred is None:
-                    preferred = (pct, secs)
-                if best is None or secs < best[1]:
-                    best = (pct, secs)
+                    preferred = (pct, reset_at)
+                if best is None or reset_at < best[1]:
+                    best = (pct, reset_at)
             for k, v in node.items():
                 visit(v, under_prefer or k == prefer)
         elif isinstance(node, list):
@@ -130,20 +150,19 @@ class CodexProvider(Provider):
         # Scan from the end for the most recent line carrying a rate-limit window.
         for line in reversed(lines):
             line = line.strip()
-            if not line or "resets_in_seconds" not in line:
+            if not line or ("resets_at" not in line and "resets_in_seconds" not in line):
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            window = _find_window(obj, prefer)
-            if window is None:
-                continue
-            used_percent, resets_in = window
             line_ts = _parse_ts(obj.get("timestamp")) or datetime.fromtimestamp(
                 rollout.stat().st_mtime, tz=timezone.utc
             )
-            reset_at = line_ts + timedelta(seconds=resets_in)
+            window = _find_window(obj, prefer, line_ts)
+            if window is None:
+                continue
+            used_percent, reset_at = window
             pct_used = (used_percent / 100.0) if used_percent is not None else None
 
             if now >= reset_at:
@@ -167,6 +186,5 @@ class CodexProvider(Provider):
 
         return QuotaState(
             Status.UNKNOWN,
-            detail="Codex doesn't save reset time locally (upstream bug #14880) — "
-            "use --reset for an exact countdown",
+            detail="no usable Codex rate-limit snapshot; run codex once or use --reset",
         )

@@ -39,6 +39,30 @@ def _token_count(ts, *, primary_pct, primary_resets, secondary_pct=10, secondary
     }
 
 
+def _token_count_resets_at(ts, *, primary_pct, primary_reset_at, secondary_pct=10, secondary_reset_at=None):
+    if secondary_reset_at is None:
+        secondary_reset_at = primary_reset_at + timedelta(seconds=600000)
+    return {
+        "timestamp": ts,
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "rate_limits": {
+                "primary": {
+                    "used_percent": primary_pct,
+                    "window_minutes": 300,
+                    "resets_at": int(primary_reset_at.timestamp()),
+                },
+                "secondary": {
+                    "used_percent": secondary_pct,
+                    "window_minutes": 10080,
+                    "resets_at": int(secondary_reset_at.timestamp()),
+                },
+            },
+        },
+    }
+
+
 def test_no_home_is_unknown(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "nope"))
     assert CodexProvider("codex", {}).read_state().status == Status.UNKNOWN
@@ -66,6 +90,22 @@ def test_exhausted_with_reset(tmp_path, monkeypatch):
     st = CodexProvider("codex", {}).read_state()
     assert st.status == Status.EXHAUSTED
     assert st.reset_at is not None and st.reset_at > now
+    assert st.pct_used == 1.0
+
+
+def test_exhausted_with_resets_at_epoch(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    now = datetime.now(timezone.utc)
+    reset_at = now + timedelta(hours=1)
+    _write_rollout(
+        tmp_path,
+        [{"timestamp": _iso(now), "type": "session_meta", "payload": {}},
+         _token_count_resets_at(_iso(now), primary_pct=100, primary_reset_at=reset_at)],
+    )
+    st = CodexProvider("codex", {}).read_state()
+    assert st.status == Status.EXHAUSTED
+    assert st.reset_at is not None
+    assert abs((st.reset_at - reset_at).total_seconds()) < 1
     assert st.pct_used == 1.0
 
 

@@ -22,10 +22,10 @@ to get back to work.
 
 - **Windows-first.** Sound via the stdlib `winsound`, native toast via
   `winotify`. No PowerShell, no admin rights. Works on macOS/Linux too.
-- **Zero-cost detection.** Reads each tool's *own local logs* — never calls any
-  API, so it never spends a token of your usage. Claude Code: estimates the 5h
-  block from session timestamps. **Codex: exact**, read straight from the
-  rate-limit snapshot the Codex CLI caches under `~/.codex`.
+- **Zero-cost detection.** Reads each tool's *own local logs* — never calls a
+  model API, so it never spends a token of your usage. Claude Code: exact when
+  the CLI wrote a real usage-limit marker. **Codex: exact**, read straight from
+  the rate-limit snapshot the Codex CLI caches under `~/.codex`.
 - **Exact mode.** Know the time already? `backtowork watch --reset 3h`.
 - **Agnostic.** A `command` provider lets you watch *any* tool via a tiny probe.
 
@@ -68,26 +68,25 @@ Press `Ctrl-C` to quit.
 
 ## How auto-detection works (and its limits)
 
-### Claude Code (estimate)
+### Claude Code (exact when limited)
 
 Claude Code writes a transcript for every session under
-`~/.claude/projects/**/*.jsonl`, each line stamped with a time. Anthropic usage
-runs in **5-hour blocks** that start at the hour of your first message, so the
-block refills roughly at `block_start + 5h`. `backtowork` reads those timestamps
-locally and counts down to that boundary.
+`~/.claude/projects/**/*.jsonl`. When the CLI actually hits the usage limit it
+records a `Claude Code usage limit reached|<unix_epoch>` marker. `backtowork`
+reads that marker locally and counts down to the exact reset time.
 
-This is an **estimate of the block boundary**, not a live quota reading — if you
-want an exact time, use `--reset`. (Tools like
-[`ccusage`](https://github.com/ryoppippi/ccusage) use the same local logs.) It
-**never contacts the Anthropic API**, by design — detection must not cost usage.
+Having recent activity does **not** mean you are out of credit. If no limit
+marker is present, the provider reports available. It **never contacts the
+Anthropic API**, by design — detection must not cost usage.
 
 ### Codex (exact, not an estimate)
 
 The OpenAI Codex CLI caches the server's rate-limit snapshot into its session
 logs under `~/.codex/sessions` (set `$CODEX_HOME` to relocate). The `codex`
 provider reads the latest snapshot — the `primary` (~5h) or `secondary` (weekly)
-window's `used_percent` and `resets_in_seconds` — and counts down to the real
-reset. No API call.
+window's `used_percent` and reset time (`resets_at` in current builds,
+`resets_in_seconds` in older builds) — and counts down to the real reset. No
+model API call.
 
 ```toml
 [[provider]]
@@ -96,9 +95,9 @@ name = "codex"
 # window = "primary"   # or "secondary" for the weekly cap
 ```
 
-Some Codex versions log `rate_limits` as `null` until the server first sends one
-([openai/codex#14880](https://github.com/openai/codex/issues/14880)); until then
-the provider reports `unknown` — fall back to `--reset` or a `command` provider.
+Some Codex versions log `rate_limits` as `null` until the server first sends
+one; until then the provider reports `unknown` — fall back to `--reset` or a
+`command` provider.
 
 ## Configure
 
@@ -121,7 +120,7 @@ Provider kinds:
 
 | kind          | what it does                                                   |
 |---------------|---------------------------------------------------------------|
-| `claude_code` | local 5h-block estimate from Claude Code logs (no API)        |
+| `claude_code` | exact Claude Code usage-limit marker from local logs (no API) |
 | `codex`       | exact usage from OpenAI Codex CLI logs (`~/.codex`, no API)    |
 | `manual`      | exact countdown to a `reset_at` you supply                     |
 | `command`     | run any script; `exit 0` = credit, `exit 75` = exhausted       |
