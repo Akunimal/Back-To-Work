@@ -130,11 +130,12 @@ def _load_providers(args, console):
                 console.print(f"[red]bad --reset value:[/red] {exc}")
                 return None, {}
             return [provider], {}
+        # No config, no --reset → fall back to auto-detecting Claude Code locally.
+        # This makes the bare `backtowork` / double-click exe work out of the box.
         console.print(
-            "[red]no config found.[/red] create backtowork.toml "
-            "(see config.example.toml), pass --config, or use --reset <when>."
+            "[dim]no config found — auto-detecting Claude Code usage from local logs[/dim]"
         )
-        return None, {}
+        return [build("claude_code", "claude", {})], {}
 
     try:
         providers, settings = load_providers(path)
