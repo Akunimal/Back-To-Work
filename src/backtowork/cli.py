@@ -11,10 +11,12 @@ Quick start with no config file:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from rich.align import Align
 from rich.console import Console, Group
@@ -116,6 +118,25 @@ def _build_notifiers(args, settings, console) -> list:
     return notifiers
 
 
+def _auto_providers() -> list:
+    """Build a provider for every supported coder whose local data dir exists.
+
+    Zero-config detection for the bare exe: Claude Code (~/.claude/projects) and
+    Codex (~/.codex/sessions). Env overrides ($CLAUDE_CONFIG_DIR, $CODEX_HOME)
+    are honored so it matches what each provider actually reads."""
+    providers = []
+
+    claude_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
+    if (claude_home / "projects").exists():
+        providers.append(build("claude_code", "claude", {}))
+
+    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    if (codex_home / "sessions").exists():
+        providers.append(build("codex", "codex", {}))
+
+    return providers
+
+
 def _load_providers(args, console):
     """Return (providers, settings) or (None, {}). Honors --reset as a zero-config
     shortcut that synthesizes a manual provider."""
@@ -130,12 +151,22 @@ def _load_providers(args, console):
                 console.print(f"[red]bad --reset value:[/red] {exc}")
                 return None, {}
             return [provider], {}
-        # No config, no --reset → fall back to auto-detecting Claude Code locally.
-        # This makes the bare `backtowork` / double-click exe work out of the box.
+        # No config, no --reset → auto-detect every supported coder whose local
+        # data is present. Makes the bare `backtowork` / double-click exe work out
+        # of the box for Claude Code AND Codex without any setup.
+        auto = _auto_providers()
+        if auto:
+            names = ", ".join(p.name for p in auto)
+            console.print(
+                f"[dim]no config found — auto-detecting usage from local logs: {names}[/dim]"
+            )
+            return auto, {}
         console.print(
-            "[dim]no config found — auto-detecting Claude Code usage from local logs[/dim]"
+            "[yellow]no config and no local Claude Code / Codex data found.[/yellow]\n"
+            "Use [bold]--reset <when>[/bold] (e.g. --reset 3h), pass --config, "
+            "or create backtowork.toml (see config.example.toml)."
         )
-        return [build("claude_code", "claude", {})], {}
+        return None, {}
 
     try:
         providers, settings = load_providers(path)
