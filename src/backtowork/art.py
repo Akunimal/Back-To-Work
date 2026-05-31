@@ -95,3 +95,34 @@ def bubbles_frame(t: float, width: int = 28, height: int = 6) -> str:
             size = 1 + int((math.sin(t * 1.3 + col) + 1) * 1.9)  # 1..4
             grid[row][col] = _BUBBLE_CHARS[min(size, len(_BUBBLE_CHARS) - 1)]
     return "\n".join("".join(r) for r in grid)
+
+
+# --- animated title shimmer (Commodore CRT vibe) -----------------------------
+# A green wave moves across the letters frame to frame.
+_SHIMMER = ["green", "green3", "spring_green2", "bright_green", "spring_green2", "green3"]
+
+
+def wave_text(text: str, t: float, palette: list[str] | None = None) -> str:
+    """Rich markup for `text` with a green shimmer wave moving across it.
+
+    Render with `rich.text.Text.from_markup(...)`. Deterministic in `t` so it
+    animates smoothly. Brackets in `text` are dropped to keep markup valid."""
+    palette = palette or _SHIMMER
+    n = len(palette)
+    speed = 5.0
+    out = []
+    for i, ch in enumerate(text):
+        if ch in " []":
+            out.append(" " if ch == " " else "")
+            continue
+        idx = int(t * speed + i) % n
+        out.append(f"[bold {palette[idx]}]{ch}[/]")
+    return "".join(out)
+
+
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def spinner(t: float) -> str:
+    """A single braille spinner glyph for the current frame."""
+    return _SPINNER[int(t * 10) % len(_SPINNER)]

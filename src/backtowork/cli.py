@@ -26,7 +26,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
-from .art import LOGO, battery, big_clock, bubbles_frame
+from .art import LOGO, battery, big_clock, bubbles_frame, spinner, wave_text
 from .config import find_config, load_providers
 from .core import Monitor
 from .models import QuotaState, RefillEvent, Status
@@ -61,7 +61,7 @@ def _soonest_reset(states: dict[str, QuotaState]) -> datetime | None:
     return min(resets) if resets else None
 
 
-def _status_table(states: dict[str, QuotaState]) -> Table:
+def _status_table(states: dict[str, QuotaState], t: float) -> Table:
     table = Table(expand=True, box=None, pad_edge=False)
     table.add_column("coder", style="bold cyan", no_wrap=True)
     table.add_column("status")
@@ -70,6 +70,9 @@ def _status_table(states: dict[str, QuotaState]) -> Table:
     table.add_column("note", style="dim", overflow="fold")
     for name, st in states.items():
         label, style = _STATUS_STYLE[st.status]
+        # Waiting coders get a live spinner so each row shows motion.
+        if st.status == Status.EXHAUSTED:
+            label = f"{spinner(t)} {label}"
         table.add_row(
             name,
             Text(label, style=style),
@@ -84,25 +87,31 @@ def _dashboard(states: dict[str, QuotaState], t: float) -> Panel:
     reset_at = _soonest_reset(states)
     any_exhausted = any(s.status == Status.EXHAUSTED for s in states.values())
 
+    # Animated title shimmer — always moving, regardless of state.
+    title_line = Text.from_markup(wave_text("BACK  TO  WORK", t))
+
     if reset_at is not None:
+        # Big green Commodore countdown to the soonest refill.
         secs = int((reset_at - datetime.now(timezone.utc)).total_seconds())
         hero: Text = Text(big_clock(secs), style="bold green")
-    elif any_exhausted:
-        hero = Text(bubbles_frame(t), style="green")
     else:
-        hero = Text("BACK TO WORK", style="bold green")
+        # No known reset (idle / available / unknown) → animated bubbles so the
+        # screen is never static.
+        hero = Text(bubbles_frame(t), style="green")
 
     body = Group(
         Text(""),
+        Align.center(title_line),
+        Text(""),
         Align.center(hero),
         Text(""),
-        _status_table(states),
+        _status_table(states, t),
     )
     stamp = datetime.now().strftime("%H:%M:%S")
     return Panel(
         body,
         title=Text(LOGO, style="bold magenta"),
-        subtitle=f"last poll {stamp} · Ctrl-C to quit",
+        subtitle=f"{spinner(t)} last poll {stamp} · Ctrl-C to quit",
         border_style="green" if not any_exhausted else "magenta",
     )
 
