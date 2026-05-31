@@ -72,11 +72,13 @@ Press `Ctrl-C` to quit.
 
 Claude Code writes a transcript for every session under
 `~/.claude/projects/**/*.jsonl`. When the CLI actually hits the usage limit it
-records a `Claude Code usage limit reached|<unix_epoch>` marker. `backtowork`
-reads that marker locally and counts down to the exact reset time.
+records a real rate-limit error such as `You've hit your session limit · resets
+5pm (America/Buenos_Aires)`, or on older builds a
+`Claude Code usage limit reached|<unix_epoch>` marker. `backtowork` reads that
+locally and counts down to the exact reset time.
 
 Having recent activity does **not** mean you are out of credit. If no limit
-marker is present, the provider reports available. It **never contacts the
+marker is present, the provider reports `unknown`. It **never contacts the
 Anthropic API**, by design — detection must not cost usage.
 
 ### Codex (exact, not an estimate)
@@ -109,7 +111,7 @@ folder you run from), or to `%APPDATA%\backtowork\config.toml` (Windows) /
 [settings]
 play_sound = true
 show_toast = true
-# sound    = "C:/path/to/your.wav"   # override the bundled chime
+# sound    = "C:/path/to/your.mp3"   # override the bundled chime
 
 [[provider]]
 kind = "claude_code"     # zero-cost local 5h-block estimate
@@ -143,7 +145,7 @@ Flags: `--reset <when>`, `--sound <path.wav>`, `--no-sound`, `--no-toast`,
 
 ```bash
 uv run pytest                         # tests
-uv run python scripts/gen_sound.py    # regenerate the bundled chime
+uv run python scripts/gen_sound.py    # regenerate the bundled WAV chime
 uv run backtowork test                # try it
 ```
 

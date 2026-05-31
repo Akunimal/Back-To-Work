@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from importlib import resources
 from pathlib import Path
 
@@ -20,12 +21,14 @@ _TITLE = "Back To Work"
 
 
 def _bundled_sound() -> Path | None:
-    """Path to the packaged refill.wav, or None if it isn't present."""
+    """Path to the packaged refill sound, or None if it isn't present."""
     try:
-        res = resources.files("backtowork") / "sounds" / "refill.wav"
-        with resources.as_file(res) as p:
-            if p.exists():
-                return Path(p)
+        sounds = resources.files("backtowork") / "sounds"
+        for name in ("BTWEOTT.mp3", "refill.wav"):
+            res = sounds / name
+            with resources.as_file(res) as p:
+                if p.exists():
+                    return Path(p)
     except (FileNotFoundError, ModuleNotFoundError, AttributeError):
         pass
     return None
@@ -75,6 +78,9 @@ class DesktopNotifier(Notifier):
         import winsound
 
         if wav and wav.exists():
+            if wav.suffix.lower() != ".wav":
+                self._play_windows_media(wav)
+                return
             winsound.PlaySound(
                 str(wav), winsound.SND_FILENAME | winsound.SND_ASYNC
             )
@@ -83,13 +89,34 @@ class DesktopNotifier(Notifier):
 
     def _play_linux(self, wav: Path | None) -> None:
         if wav and wav.exists():
-            for player in ("paplay", "aplay"):
+            for player in ("paplay", "aplay", "ffplay", "mpg123", "mpv", "cvlc"):
                 exe = shutil.which(player)
                 if exe:
-                    subprocess.Popen([exe, str(wav)])
+                    args = [exe, str(wav)]
+                    if player == "ffplay":
+                        args = [exe, "-nodisp", "-autoexit", "-loglevel", "quiet", str(wav)]
+                    elif player in ("mpv", "cvlc"):
+                        args = [exe, "--no-video", str(wav)]
+                    subprocess.Popen(args)
                     return
         sys.stdout.write("\a")
         sys.stdout.flush()
+
+    def _play_windows_media(self, sound: Path) -> None:
+        from ctypes import windll  # Windows-only; import lazily so the module
+        # imports cleanly on macOS/Linux (where ctypes.windll doesn't exist).
+
+        alias = f"btw_{int(time.time() * 1000)}"
+        mci = windll.winmm.mciSendStringW
+        quoted = str(sound).replace('"', "")
+        if mci(f'open "{quoted}" alias {alias}', None, 0, None) != 0:
+            raise RuntimeError("cannot open media sound")
+        try:
+            if mci(f"play {alias}", None, 0, None) != 0:
+                raise RuntimeError("cannot play media sound")
+        except Exception:
+            mci(f"close {alias}", None, 0, None)
+            raise
 
     # --- toast ---------------------------------------------------------------
     def _toast(self, body: str) -> None:

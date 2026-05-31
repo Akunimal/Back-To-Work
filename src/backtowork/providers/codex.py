@@ -102,12 +102,12 @@ def _find_window(obj, prefer: str, line_ts: datetime):
     return preferred if preferred is not None else best
 
 
-def _latest_rollout(home: Path, max_age: timedelta, now: datetime) -> Path | None:
+def _recent_rollouts(home: Path, max_age: timedelta, now: datetime) -> list[Path]:
     sessions = home / "sessions"
     if not sessions.exists():
-        return None
-    newest: tuple[float, Path] | None = None
+        return []
     cutoff = (now - max_age).timestamp()
+    rollouts: list[tuple[float, Path]] = []
     for jsonl in sessions.rglob("*.jsonl"):
         try:
             mtime = jsonl.stat().st_mtime
@@ -115,9 +115,52 @@ def _latest_rollout(home: Path, max_age: timedelta, now: datetime) -> Path | Non
             continue
         if mtime < cutoff:
             continue
-        if newest is None or mtime > newest[0]:
-            newest = (mtime, jsonl)
-    return newest[1] if newest else None
+        rollouts.append((mtime, jsonl))
+    rollouts.sort(reverse=True)
+    return [path for _, path in rollouts]
+
+
+def _latest_window(home: Path, max_age: timedelta, now: datetime, prefer: str):
+    """Return the newest usable Codex rate-limit window across recent rollouts."""
+    best: tuple[datetime, float | None, datetime] | None = None
+
+    for rollout in _recent_rollouts(home, max_age, now):
+        try:
+            lines = rollout.read_text(encoding="utf-8", errors="ignore").splitlines()
+            fallback_ts = datetime.fromtimestamp(rollout.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            continue
+
+        for line in reversed(lines):
+            line = line.strip()
+            if (
+                not line
+                or "rate_limits" not in line
+                or ("resets_at" not in line and "resets_in_seconds" not in line)
+            ):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            line_ts = _parse_ts(obj.get("timestamp")) or fallback_ts
+            rate_limits = None
+            if isinstance(obj, dict):
+                payload = obj.get("payload")
+                if isinstance(payload, dict):
+                    rate_limits = payload.get("rate_limits")
+                rate_limits = rate_limits or obj.get("rate_limits")
+            if not isinstance(rate_limits, dict):
+                continue
+            window = _find_window(rate_limits, prefer, line_ts)
+            if window is None:
+                continue
+            used_percent, reset_at = window
+            if best is None or line_ts > best[0]:
+                best = (line_ts, used_percent, reset_at)
+            break
+
+    return best
 
 
 @register("codex")
@@ -135,56 +178,31 @@ class CodexProvider(Provider):
         max_age = timedelta(days=float(self.options.get("max_age_days", 14)))
         now = datetime.now(timezone.utc)
 
-        rollout = _latest_rollout(home, max_age, now)
-        if rollout is None:
+        window = _latest_window(home, max_age, now, prefer)
+        if window is None:
             return QuotaState(
                 Status.UNKNOWN,
-                detail="no recent Codex session logs; run codex once to record usage",
+                detail="no usable Codex rate-limit snapshot; run codex once",
             )
 
-        try:
-            lines = rollout.read_text(encoding="utf-8", errors="ignore").splitlines()
-        except OSError as exc:
-            return QuotaState(Status.UNKNOWN, detail=f"cannot read {rollout.name}: {exc}")
+        _, used_percent, reset_at = window
+        pct_used = (used_percent / 100.0) if used_percent is not None else None
 
-        # Scan from the end for the most recent line carrying a rate-limit window.
-        for line in reversed(lines):
-            line = line.strip()
-            if not line or ("resets_at" not in line and "resets_in_seconds" not in line):
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            line_ts = _parse_ts(obj.get("timestamp")) or datetime.fromtimestamp(
-                rollout.stat().st_mtime, tz=timezone.utc
-            )
-            window = _find_window(obj, prefer, line_ts)
-            if window is None:
-                continue
-            used_percent, reset_at = window
-            pct_used = (used_percent / 100.0) if used_percent is not None else None
-
-            if now >= reset_at:
-                return QuotaState(Status.AVAILABLE, pct_used=pct_used, detail="window reset")
-            if used_percent is not None and used_percent >= threshold:
-                return QuotaState(
-                    Status.EXHAUSTED,
-                    reset_at=reset_at,
-                    pct_used=pct_used,
-                    detail=f"{prefer} window {used_percent:.0f}% used",
-                )
+        if now >= reset_at:
+            return QuotaState(Status.AVAILABLE, pct_used=0.0, detail="window reset")
+        if used_percent is not None and used_percent >= threshold:
             return QuotaState(
-                Status.AVAILABLE,
+                Status.EXHAUSTED,
+                reset_at=reset_at,
                 pct_used=pct_used,
-                detail=(
-                    f"{prefer} window {used_percent:.0f}% used"
-                    if used_percent is not None
-                    else "credit available"
-                ),
+                detail=f"{prefer} window {used_percent:.0f}% used",
             )
-
         return QuotaState(
-            Status.UNKNOWN,
-            detail="no usable Codex rate-limit snapshot; run codex once or use --reset",
+            Status.AVAILABLE,
+            pct_used=pct_used,
+            detail=(
+                f"{prefer} window {used_percent:.0f}% used"
+                if used_percent is not None
+                else "credit available"
+            ),
         )

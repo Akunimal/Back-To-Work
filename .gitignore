@@ -27,3 +27,7 @@ _zip_extract/
 *.spec
 dist/
 build/
+
+# Tooling / agents
+.serena/
+.claude/

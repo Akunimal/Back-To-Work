@@ -8,12 +8,13 @@ idle_interval = 60     # seconds between polls while credit is available
 fast_interval = 10     # seconds between polls right around a known reset
 play_sound    = true   # play a sound when credit comes back
 show_toast    = true   # show a desktop toast (needs the `toast` extra on Windows)
-# sound       = "C:/path/to/your.wav"   # override the bundled chime
+# sound       = "C:/path/to/your.mp3"   # override the bundled chime
 
 # --- Claude Code (zero-cost, local exact marker) -----------------------------
 # Reads Claude Code's own session transcripts under ~/.claude/projects and looks
-# for the explicit usage-limit marker written by the CLI. Never calls the
-# Anthropic API. Recent activity alone is not treated as exhausted.
+# for real rate-limit errors with reset times written by the CLI. Never calls
+# the Anthropic API. Recent activity alone is not treated as exhausted; no marker
+# is reported as "unknown".
 [[provider]]
 kind = "claude_code"
 name = "claude"

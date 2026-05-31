@@ -17,6 +17,14 @@ def _write_rollout(home, lines):
     return p
 
 
+def _write_named_rollout(home, name, lines):
+    d = home / "sessions" / "2026" / "05" / "30"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / name
+    p.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    return p
+
+
 def _token_count(ts, *, primary_pct, primary_resets, secondary_pct=10, secondary_resets=600000):
     return {
         "timestamp": ts,
@@ -124,6 +132,33 @@ def test_stale_window_already_reset(tmp_path, monkeypatch):
     _write_rollout(tmp_path, [_token_count(_iso(past), primary_pct=100, primary_resets=3600)])
     st = CodexProvider("codex", {}).read_state()
     assert st.status == Status.AVAILABLE  # reset_at (past + 1h) is already behind us
+    assert st.pct_used == 0.0
+
+
+def test_uses_newest_snapshot_by_timestamp_not_file_mtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    now = datetime.now(timezone.utc)
+    old_ts = now - timedelta(hours=2)
+    new_ts = now
+    stale = _write_named_rollout(
+        tmp_path,
+        "rollout-stale.jsonl",
+        [_token_count(_iso(old_ts), primary_pct=83, primary_resets=60)],
+    )
+    fresh = _write_named_rollout(
+        tmp_path,
+        "rollout-fresh.jsonl",
+        [_token_count(_iso(new_ts), primary_pct=4, primary_resets=3600)],
+    )
+    # A running process can keep appending unrelated lines to an older rollout.
+    # The provider should use the newest token_count timestamp, not file mtime.
+    stale.touch()
+    fresh.touch()
+    stale.touch()
+    st = CodexProvider("codex", {}).read_state()
+    assert st.status == Status.AVAILABLE
+    assert abs((st.pct_used or 0) - 0.04) < 1e-6
+    assert st.detail == "primary window 4% used"
 
 
 def test_prefers_primary_window(tmp_path, monkeypatch):
