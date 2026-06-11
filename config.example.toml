@@ -4,7 +4,7 @@
 #   backtowork watch --reset 3h
 
 [settings]
-idle_interval = 60     # seconds between polls while credit is available
+idle_interval = 5      # seconds between polls while credit is available
 fast_interval = 10     # seconds between polls right around a known reset
 play_sound    = true   # play a sound when credit comes back
 show_toast    = true   # show a desktop toast (needs the `toast` extra on Windows)
@@ -19,6 +19,8 @@ show_toast    = true   # show a desktop toast (needs the `toast` extra on Window
 kind = "claude_code"
 name = "claude"
 # lookback_hours = 6
+# current_hours  = 5   # local token total shown as "current"
+# weekly_days    = 7   # local token total shown as "weekly"
 
 # --- Codex (zero-cost, local, exact when available) --------------------------
 # The OpenAI Codex CLI caches the server's own rate-limit snapshot into its
@@ -29,7 +31,7 @@ name = "claude"
 # [[provider]]
 # kind = "codex"
 # name = "codex"
-# window            = "primary"   # "primary" (~5h) or "secondary" (weekly)
+# window            = "primary"   # legacy main window; UI shows both by default
 # threshold_percent = 95          # treat the window as exhausted at/above this
 # max_age_days      = 14
 

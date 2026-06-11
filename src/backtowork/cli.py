@@ -52,6 +52,16 @@ def _countdown_label(reset_at: datetime | None) -> str:
     return f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
 
 
+def _tokens_label(tokens: int | None) -> str:
+    if tokens is None:
+        return battery(None)
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}M tok"
+    if tokens >= 1_000:
+        return f"{tokens / 1_000:.1f}K tok"
+    return f"{tokens} tok"
+
+
 def _soonest_reset(states: dict[str, QuotaState]) -> datetime | None:
     resets = [
         s.reset_at
@@ -69,17 +79,30 @@ def _status_table(states: dict[str, QuotaState], t: float) -> Table:
     table.add_column("resets in", justify="right")
     table.add_column("note", style="dim", overflow="fold")
     for name, st in states.items():
-        label, style = _STATUS_STYLE[st.status]
-        # Waiting coders get a live spinner so each row shows motion.
-        if st.status == Status.EXHAUSTED:
-            label = f"{spinner(t)} {label}"
-        table.add_row(
-            name,
-            Text(label, style=style),
-            battery(st.pct_used),
-            _countdown_label(st.reset_at),
-            st.detail or "",
-        )
+        rows = st.usage_windows or (None,)
+        for usage in rows:
+            # A window can carry its own status (e.g. "current" is fine while
+            # "weekly" is exhausted); fall back to the coder's overall status.
+            row_status = st.status if usage is None or usage.status is None else usage.status
+            label, style = _STATUS_STYLE[row_status]
+            # Waiting coders get a live spinner so each row shows motion.
+            if row_status == Status.EXHAUSTED:
+                label = f"{spinner(t)} {label}"
+            row_name = name if usage is None else f"{name} {usage.name}"
+            pct_used = st.pct_used if usage is None else usage.pct_used
+            tokens_used = None if usage is None else usage.tokens_used
+            # Don't borrow the coder's global reset for a window that has its own
+            # (refilled windows report no reset and should read "—", not the
+            # weekly countdown).
+            reset_at = st.reset_at if usage is None else usage.reset_at
+            note = st.detail if usage is None else usage.detail
+            table.add_row(
+                row_name,
+                Text(label, style=style),
+                battery(pct_used) if tokens_used is None else _tokens_label(tokens_used),
+                _countdown_label(reset_at),
+                note or "",
+            )
     return table
 
 
@@ -169,7 +192,7 @@ def _load_providers(args, console):
             console.print(
                 f"[dim]no config found — auto-detecting usage from local logs: {names}[/dim]"
             )
-            return auto, {}
+            return auto, {"idle_interval": 5}
         console.print(
             "[yellow]no config and no local Claude Code / Codex data found.[/yellow]\n"
             "Use [bold]--reset <when>[/bold] (e.g. --reset 3h), pass --config, "

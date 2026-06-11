@@ -23,7 +23,9 @@ Key fix vs. older versions: having recent activity does NOT mean you're out of
 credit, but no marker also does not prove credit is available.
 
 Options (all optional):
-    lookback_hours = 6     # only scan transcripts touched within this window
+    lookback_hours = 6       # only scan transcripts touched within this window
+    current_hours  = 5       # local usage window shown as "current"
+    weekly_days    = 7       # local usage window shown as "weekly"
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from ..models import QuotaState, Status
+from ..models import QuotaState, Status, UsageWindow
 from .base import Provider, register
 
 # The marker Claude Code writes on a real rate-limit, e.g.
@@ -278,6 +280,73 @@ def _latest_marker(projects: Path, lookback_secs: float, now: datetime) -> datet
     return best_reset
 
 
+def _usage_tokens(usage) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    total = 0
+    for key in (
+        "input_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "output_tokens",
+    ):
+        value = usage.get(key)
+        if isinstance(value, int):
+            total += value
+    return total
+
+
+def _local_usage_windows(
+    projects: Path,
+    current: timedelta,
+    weekly: timedelta,
+    now: datetime,
+) -> tuple[UsageWindow, ...]:
+    cutoff = now - weekly
+    current_tokens = 0
+    weekly_tokens = 0
+
+    for jsonl in projects.rglob("*.jsonl"):
+        try:
+            if jsonl.stat().st_mtime < cutoff.timestamp():
+                continue
+            lines = jsonl.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+
+        for line in lines:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            seen_at = _parse_transcript_ts(obj.get("timestamp"))
+            if seen_at is None or seen_at < cutoff:
+                continue
+            msg = obj.get("message")
+            usage = msg.get("usage") if isinstance(msg, dict) else None
+            tokens = _usage_tokens(usage)
+            if tokens <= 0:
+                continue
+            weekly_tokens += tokens
+            if seen_at >= now - current:
+                current_tokens += tokens
+
+    return (
+        UsageWindow(
+            name="current",
+            tokens_used=current_tokens,
+            detail=f"last {int(current.total_seconds() // 3600)}h",
+        ),
+        UsageWindow(
+            name="weekly",
+            tokens_used=weekly_tokens,
+            detail=f"last {weekly.days}d",
+        ),
+    )
+
+
 @register("claude_code")
 class ClaudeCodeProvider(Provider):
     def read_state(self) -> QuotaState:
@@ -290,16 +359,28 @@ class ClaudeCodeProvider(Provider):
             )
 
         lookback = float(self.options.get("lookback_hours", 6)) * 3600
+        current = timedelta(hours=float(self.options.get("current_hours", 5)))
+        weekly = timedelta(days=float(self.options.get("weekly_days", 7)))
         now = datetime.now(timezone.utc)
 
+        usage_windows = _local_usage_windows(projects, current, weekly, now)
         reset_at = _latest_marker(projects, lookback, now)
         if reset_at is None:
-            return QuotaState(Status.UNKNOWN, detail="no usage-limit marker")
+            return QuotaState(
+                Status.UNKNOWN,
+                detail="no usage-limit marker",
+                usage_windows=usage_windows,
+            )
         if now >= reset_at:
-            return QuotaState(Status.AVAILABLE, detail="limit window elapsed")
+            return QuotaState(
+                Status.AVAILABLE,
+                detail="limit window elapsed",
+                usage_windows=usage_windows,
+            )
 
         return QuotaState(
             Status.EXHAUSTED,
             reset_at=reset_at,
             detail="usage limit reached (exact reset)",
+            usage_windows=usage_windows,
         )

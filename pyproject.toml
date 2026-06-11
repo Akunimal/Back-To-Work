@@ -1,6 +1,6 @@
 [project]
 name = "backtowork"
-version = "0.1.6"
+version = "0.1.7"
 description = "Tells you (with a sound) when your coder's credit comes back. Windows-first CLI."
 readme = "README.md"
 requires-python = ">=3.11"

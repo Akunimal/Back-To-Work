@@ -78,15 +78,17 @@ records a real rate-limit error such as `You've hit your session limit · resets
 locally and counts down to the exact reset time.
 
 Having recent activity does **not** mean you are out of credit. If no limit
-marker is present, the provider reports `unknown`. It **never contacts the
-Anthropic API**, by design — detection must not cost usage.
+marker is present, the provider reports `unknown`. It still shows local token
+totals for the current 5-hour and weekly windows when transcript usage data is
+present. It **never contacts the Anthropic API**, by design — detection must not
+cost usage.
 
 ### Codex (exact, not an estimate)
 
 The OpenAI Codex CLI caches the server's rate-limit snapshot into its session
 logs under `~/.codex/sessions` (set `$CODEX_HOME` to relocate). The `codex`
-provider reads the latest snapshot — the `primary` (~5h) or `secondary` (weekly)
-window's `used_percent` and reset time (`resets_at` in current builds,
+provider reads the latest snapshot — both the `primary` (~5h) and `secondary`
+(weekly) windows' `used_percent` and reset time (`resets_at` in current builds,
 `resets_in_seconds` in older builds) — and counts down to the real reset. No
 model API call.
 
@@ -94,7 +96,7 @@ model API call.
 [[provider]]
 kind = "codex"
 name = "codex"
-# window = "primary"   # or "secondary" for the weekly cap
+# window = "primary"   # legacy main window; status view shows both by default
 ```
 
 Some Codex versions log `rate_limits` as `null` until the server first sends

@@ -33,6 +33,10 @@ def battery(pct_used: float | None) -> str:
     pct_used = max(0.0, min(1.0, pct_used))
     remaining = 1.0 - pct_used
     cells = round(remaining * 10)
+    # A full 10-cell bar must mean truly zero usage — otherwise a 1%-used window
+    # rounds up to a full battery and reads as a false 100%.
+    if pct_used > 0 and cells == 10:
+        cells = 9
     return "[" + "█" * cells + "·" * (10 - cells) + f"] {remaining * 100:3.0f}%"
 
 

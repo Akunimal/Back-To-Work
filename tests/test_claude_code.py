@@ -59,6 +59,21 @@ def _tool_output_marker_line(reset_epoch):
     }
 
 
+def _usage_line(ts, *, input_tokens=0, cache_creation=0, cache_read=0, output_tokens=0):
+    return {
+        "type": "assistant",
+        "timestamp": _iso(ts),
+        "message": {
+            "usage": {
+                "input_tokens": input_tokens,
+                "cache_creation_input_tokens": cache_creation,
+                "cache_read_input_tokens": cache_read,
+                "output_tokens": output_tokens,
+            }
+        },
+    }
+
+
 def test_no_projects_is_unknown(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     st = ClaudeCodeProvider("claude", {}).read_state()
@@ -81,6 +96,25 @@ def test_activity_without_marker_is_unknown(tmp_path, monkeypatch):
     st = ClaudeCodeProvider("claude", {}).read_state()
     assert st.status == Status.UNKNOWN
     assert st.reset_at is None
+
+
+def test_local_usage_windows_sum_tokens(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    now = datetime.now(timezone.utc)
+    _write_jsonl(
+        tmp_path / "projects" / "proj" / "s.jsonl",
+        [
+            _usage_line(now - timedelta(hours=1), input_tokens=100, output_tokens=50),
+            _usage_line(now - timedelta(hours=6), cache_read=25, output_tokens=25),
+            _usage_line(now - timedelta(days=8), input_tokens=999),
+        ],
+    )
+    st = ClaudeCodeProvider("claude", {}).read_state()
+    assert st.status == Status.UNKNOWN
+    assert [(w.name, w.tokens_used) for w in st.usage_windows] == [
+        ("current", 150),
+        ("weekly", 200),
+    ]
 
 
 def test_future_marker_is_exhausted_with_exact_reset(tmp_path, monkeypatch):

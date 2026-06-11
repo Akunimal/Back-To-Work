@@ -12,7 +12,7 @@ Each line is JSON with a top-level "timestamp". Token-count events embed a
 absolute `resets_at` epoch; older builds wrote relative `resets_in_seconds`.
 
 We tolerantly scan the most recent rollout for the latest object that contains
-either reset field, prefer the `primary` window, and compute:
+either reset field, read both quota windows, and compute:
     reset_at = epoch(resets_at) OR <line timestamp> + resets_in_seconds
 
 When nothing usable is found we return UNKNOWN with a hint to run Codex once or
@@ -20,7 +20,7 @@ use a `manual`/`command` provider instead.
 
 Options (all optional):
     threshold_percent = 95          # treat the window as exhausted at/above this
-    window            = "primary"   # or "secondary" (weekly)
+    window            = "primary"   # legacy main window for pct_used/reset_at
     max_age_days      = 14          # ignore rollout files older than this
 """
 
@@ -28,15 +28,30 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from ..models import QuotaState, Status
+from ..models import QuotaState, Status, UsageWindow
 from .base import Provider, register
+
+# The short rolling quota window Codex reports as `primary` is ~5h. If our newest
+# on-disk snapshot is older than that, every percentage in it predates a full
+# refill cycle and must be treated as a guess, not a live reading.
+_PRIMARY_WINDOW = timedelta(minutes=300)
 
 
 def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+
+
+def _age_label(age: timedelta) -> str:
+    secs = max(0, int(age.total_seconds()))
+    h, rem = divmod(secs, 3600)
+    if h >= 24:
+        return f"{h // 24}d{(h % 24):02d}h"
+    m = rem // 60
+    return f"{h}h{m:02d}m" if h else f"{m}m"
 
 
 def _parse_ts(raw) -> datetime | None:
@@ -102,6 +117,37 @@ def _find_window(obj, prefer: str, line_ts: datetime):
     return preferred if preferred is not None else best
 
 
+def _window_from_node(name: str, node, line_ts: datetime) -> UsageWindow | None:
+    if not isinstance(node, dict):
+        return None
+    reset_at = _window_reset_at(node, line_ts)
+    pct = node.get("used_percent")
+    pct_used = (float(pct) / 100.0) if isinstance(pct, (int, float)) else None
+    # A window with neither a reset nor a percentage carries no signal. But a
+    # window with a percentage and no reset (e.g. a plan that omits the weekly
+    # reset epoch) is still worth showing — just without a countdown.
+    if reset_at is None and pct_used is None:
+        return None
+    label = "current" if name == "primary" else "weekly" if name == "secondary" else name
+    return UsageWindow(
+        name=label,
+        pct_used=pct_used,
+        reset_at=reset_at,
+        detail=f"{int(node.get('window_minutes', 0))}m window"
+        if isinstance(node.get("window_minutes"), int)
+        else None,
+    )
+
+
+def _extract_windows(rate_limits: dict, line_ts: datetime) -> tuple[UsageWindow, ...]:
+    windows: list[UsageWindow] = []
+    for name in ("primary", "secondary"):
+        window = _window_from_node(name, rate_limits.get(name), line_ts)
+        if window is not None:
+            windows.append(window)
+    return tuple(windows)
+
+
 def _recent_rollouts(home: Path, max_age: timedelta, now: datetime) -> list[Path]:
     sessions = home / "sessions"
     if not sessions.exists():
@@ -120,9 +166,58 @@ def _recent_rollouts(home: Path, max_age: timedelta, now: datetime) -> list[Path
     return [path for _, path in rollouts]
 
 
-def _latest_window(home: Path, max_age: timedelta, now: datetime, prefer: str):
-    """Return the newest usable Codex rate-limit window across recent rollouts."""
-    best: tuple[datetime, float | None, datetime] | None = None
+def _finalize_window(
+    w: UsageWindow, now: datetime, threshold: float, stale: bool
+) -> UsageWindow:
+    """Tag a raw window with a per-window status, normalize spent windows, and
+    flag stale percentages so the UI never presents a guess as a live reading."""
+    # Window already past its reset → it has refilled. The stale percentage we
+    # last saw is meaningless now; show it as available with no countdown.
+    if w.reset_at is not None and now >= w.reset_at:
+        return replace(
+            w,
+            pct_used=0.0,
+            reset_at=None,
+            detail="reset — run codex to refresh",
+            status=Status.AVAILABLE,
+            assumed=True,
+        )
+    status = Status.AVAILABLE
+    if w.pct_used is not None and w.pct_used * 100 >= threshold:
+        status = Status.EXHAUSTED
+    detail = w.detail
+    if stale:
+        detail = f"{detail} · stale" if detail else "stale"
+    return replace(w, detail=detail, status=status, assumed=stale)
+
+
+def _apply_reached(
+    windows: tuple[UsageWindow, ...], reached_type
+) -> tuple[UsageWindow, ...]:
+    """Honor Codex's authoritative `rate_limit_reached_type`: if the server says
+    a window is blocked, mark it exhausted even if its percentage sits below our
+    local threshold."""
+    target = {"primary": "current", "secondary": "weekly"}.get(reached_type)
+    if target is None:
+        return windows
+    return tuple(
+        replace(w, status=Status.EXHAUSTED)
+        if w.name == target and w.reset_at is not None
+        else w
+        for w in windows
+    )
+
+
+def _latest_snapshot(home: Path, max_age: timedelta, now: datetime, prefer: str):
+    """Return the newest usable Codex rate-limit snapshot across recent rollouts."""
+    best: tuple[
+        datetime,
+        float | None,
+        datetime,
+        tuple[UsageWindow, ...],
+        object,
+        object,
+    ] | None = None
 
     for rollout in _recent_rollouts(home, max_age, now):
         try:
@@ -156,8 +251,11 @@ def _latest_window(home: Path, max_age: timedelta, now: datetime, prefer: str):
             if window is None:
                 continue
             used_percent, reset_at = window
+            usage_windows = _extract_windows(rate_limits, line_ts)
+            reached = rate_limits.get("rate_limit_reached_type")
+            plan = rate_limits.get("plan_type")
             if best is None or line_ts > best[0]:
-                best = (line_ts, used_percent, reset_at)
+                best = (line_ts, used_percent, reset_at, usage_windows, reached, plan)
             break
 
     return best
@@ -178,31 +276,64 @@ class CodexProvider(Provider):
         max_age = timedelta(days=float(self.options.get("max_age_days", 14)))
         now = datetime.now(timezone.utc)
 
-        window = _latest_window(home, max_age, now, prefer)
-        if window is None:
+        snapshot = _latest_snapshot(home, max_age, now, prefer)
+        if snapshot is None:
             return QuotaState(
                 Status.UNKNOWN,
                 detail="no usable Codex rate-limit snapshot; run codex once",
             )
 
-        _, used_percent, reset_at = window
-        pct_used = (used_percent / 100.0) if used_percent is not None else None
+        snapshot_ts, used_percent, reset_at, raw_windows, reached_type, plan_type = snapshot
+        # A snapshot older than one full primary window predates a refill cycle;
+        # its percentages are guesses, not live readings.
+        age = now - snapshot_ts
+        stale = age > _PRIMARY_WINDOW
 
-        if now >= reset_at:
-            return QuotaState(Status.AVAILABLE, pct_used=0.0, detail="window reset")
-        if used_percent is not None and used_percent >= threshold:
+        windows = tuple(_finalize_window(w, now, threshold, stale) for w in raw_windows)
+        windows = _apply_reached(windows, reached_type)
+
+        plan_note = f" · {plan_type}" if isinstance(plan_type, str) and plan_type else ""
+        exhausted = [w for w in windows if w.status == Status.EXHAUSTED]
+
+        if exhausted:
+            reset_candidates = [w.reset_at for w in exhausted if w.reset_at is not None]
+            detail = ", ".join(
+                f"{w.name} {w.pct_used * 100:.0f}% used"
+                for w in exhausted
+                if w.pct_used is not None
+            )
             return QuotaState(
                 Status.EXHAUSTED,
-                reset_at=reset_at,
-                pct_used=pct_used,
-                detail=f"{prefer} window {used_percent:.0f}% used",
+                reset_at=min(reset_candidates) if reset_candidates else reset_at,
+                pct_used=(used_percent / 100.0) if used_percent is not None else None,
+                detail=(detail or "limit reached") + plan_note,
+                usage_windows=windows,
             )
+
+        if stale:
+            # Nothing on disk is recent enough to assert a confident "100% free".
+            # Surface the uncertainty instead of a misleading full battery.
+            return QuotaState(
+                Status.AVAILABLE,
+                pct_used=None,
+                detail=f"stale snapshot ({_age_label(age)} old) — run codex to confirm" + plan_note,
+                usage_windows=windows,
+            )
+
+        primary = next((w for w in windows if w.name == "current"), None)
+        pct_used = (
+            primary.pct_used
+            if primary is not None
+            else (used_percent / 100.0) if used_percent is not None else None
+        )
+        detail = (
+            f"current window {primary.pct_used * 100:.0f}% used"
+            if primary is not None and primary.pct_used is not None
+            else "credit available"
+        )
         return QuotaState(
             Status.AVAILABLE,
             pct_used=pct_used,
-            detail=(
-                f"{prefer} window {used_percent:.0f}% used"
-                if used_percent is not None
-                else "credit available"
-            ),
+            detail=detail + plan_note,
+            usage_windows=windows,
         )
