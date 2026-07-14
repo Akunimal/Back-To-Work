@@ -1,8 +1,12 @@
+﻿"""Tests for art module — including new breathing + animated clock."""
+
 from rich.text import Text
 
 from backtowork.art import (
     DIGIT_HEIGHT,
     big_clock,
+    big_clock_animated,
+    breathing_green,
     big_digits,
     bubbles_frame,
     clock_text,
@@ -53,3 +57,48 @@ def test_spinner_cycles():
     frames = {spinner(i * 0.1) for i in range(10)}
     assert len(frames) > 1  # actually animates
     assert all(len(s) == 1 for s in frames)
+
+
+# --- new animation tests ----------------------------------------------------
+
+def test_breathing_green_cycles():
+    """breathing_green returns different color names over time."""
+    colors = {breathing_green(t * 0.5) for t in range(10)}
+    assert len(colors) > 1
+
+
+def test_breathing_green_is_valid_rich_color():
+    """Each returned color should be a known rich color name (non-empty str)."""
+    for t in range(20):
+        c = breathing_green(t * 0.3)
+        assert isinstance(c, str) and len(c) > 0
+
+
+def test_big_clock_animated_dimensions():
+    """animated clock has same dimensions as big_clock."""
+    static = big_clock(3661)
+    animated = big_clock_animated(3661, 0.0)
+    assert len(animated.split("\n")) == len(static.split("\n"))
+    assert len(animated.split("\n")[0]) == len(static.split("\n")[0])
+
+
+def test_big_clock_animated_colon_blinks():
+    """Colon toggles visible/hidden across time."""
+    c_on = big_clock_animated(3661, 0.0)   # colon visible
+    c_off = big_clock_animated(3661, 0.6)  # colon hidden (~0.5s blink)
+    assert c_on != c_off
+
+
+def test_big_clock_animated_matches_static_when_colon_visible():
+    """When colon is visible, output matches regular big_clock (ignoring trailing space diffs)."""
+    static = big_clock(3661)
+    animated = big_clock_animated(3661, 0.0)
+    # Strip trailing whitespace per line for comparison
+    static_norm = "\n".join(line.rstrip() for line in static.split("\n"))
+    anim_norm = "\n".join(line.rstrip() for line in animated.split("\n"))
+    assert static_norm == anim_norm
+
+
+def test_big_clock_animated_negative_seconds():
+    """Negative seconds should render as 00:00 (same as big_clock)."""
+    assert big_clock_animated(-1, 0.0) == big_clock_animated(0, 0.0)

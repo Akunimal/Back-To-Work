@@ -85,19 +85,30 @@ def big_clock(seconds: int) -> str:
 
 
 # --- bubbles animation (fallback / idle flourish) ----------------------------
-_BUBBLE_CHARS = " ·∘oO"
+_BUBBLE_CHARS = "·∘oO"
 
 
 def bubbles_frame(t: float, width: int = 28, height: int = 6) -> str:
-    """A frame of dots rising like bubbles. `t` is a monotonically rising time
-    (seconds). Deterministic, so it animates smoothly across calls."""
+    """Animated particle system — rising bubbles with lateral sway.
+    Deterministic in 	 for smooth animation across calls."""
     grid = [[" "] * width for _ in range(height)]
-    for col in range(0, width, 3):
-        phase = (t * (0.7 + 0.25 * (col % 5)) + col * 0.9) % (height + 2)
+    # Background mist — slow tiny dots at every column
+    for col in range(width):
+        phase = (t * 0.35 + col * 0.45) % (height + 2)
         row = height - 1 - int(phase)
         if 0 <= row < height:
-            size = 1 + int((math.sin(t * 1.3 + col) + 1) * 1.9)  # 1..4
-            grid[row][col] = _BUBBLE_CHARS[min(size, len(_BUBBLE_CHARS) - 1)]
+            bright = (math.sin(t * 0.7 + col * 0.5) + 1) * 0.5
+            if bright > 0.65:
+                grid[row][col] = "·"
+    # Foreground bubbles — every 2nd column with lateral sway
+    for col in range(0, width, 2):
+        phase = (t * (0.65 + 0.3 * (col % 5)) + col * 0.85) % (height + 2)
+        row = height - 1 - int(phase)
+        if 0 <= row < height:
+            sway = int(math.sin(t * 1.3 + col * 0.6) * 0.8)
+            cx = max(0, min(width - 1, col + sway))
+            size = int((math.sin(t * 1.6 + col) + 1) * 2)  # 0..3
+            grid[row][cx] = _BUBBLE_CHARS[min(size, len(_BUBBLE_CHARS) - 1)]
     return "\n".join("".join(r) for r in grid)
 
 
@@ -130,3 +141,69 @@ _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 def spinner(t: float) -> str:
     """A single braille spinner glyph for the current frame."""
     return _SPINNER[int(t * 10) % len(_SPINNER)]
+
+# --- breathing clock effects -------------------------------------------------
+
+_BREATHING_GREENS = [
+    "green", "green3", "spring_green2", "bright_green",
+    "spring_green2", "green3",
+]
+
+
+def breathing_green(t: float) -> str:
+    """Returns a green shade that cycles smoothly frame-to-frame."""
+    return _BREATHING_GREENS[int(t * 2.5) % len(_BREATHING_GREENS)]
+
+
+# Empty colon variant so the big clock blinks
+_EMPTY_COLON = ["   ", "   ", "   ", "   ", "   "]
+
+def big_clock_animated(seconds: int, t: float) -> str:
+    """Like big_clock but the colon blinks on/off every ~0.5s."""
+    text = clock_text(seconds)
+    glyphs = [_FONT.get(ch, _FONT[" "]) for ch in text]
+    colon_visible = int(t * 2) % 2 == 0
+    rows = []
+    for r in range(DIGIT_HEIGHT):
+        parts = []
+        for ch, glyph in zip(text, glyphs):
+            if ch == ":" and not colon_visible:
+                parts.append(_EMPTY_COLON[r])
+            else:
+                parts.append(glyph[r])
+        rows.append(" ".join(parts))
+    return "\n".join(rows)
+
+
+# --- breathing clock effects -------------------------------------------------
+
+_BREATHING_GREENS = [
+    "green", "green3", "spring_green2", "bright_green",
+    "spring_green2", "green3",
+]
+
+
+def breathing_green(t: float) -> str:
+    """Returns a green shade that cycles smoothly frame-to-frame."""
+    return _BREATHING_GREENS[int(t * 2.5) % len(_BREATHING_GREENS)]
+
+
+# Empty colon variant so the big clock blinks
+_EMPTY_COLON = ["   ", "   ", "   ", "   ", "   "]
+
+def big_clock_animated(seconds: int, t: float) -> str:
+    """Like big_clock but the colon blinks on/off every ~0.5s."""
+    text = clock_text(seconds)
+    glyphs = [_FONT.get(ch, _FONT[" "]) for ch in text]
+    colon_visible = int(t * 2) % 2 == 0
+    rows = []
+    for r in range(DIGIT_HEIGHT):
+        parts = []
+        for ch, glyph in zip(text, glyphs):
+            if ch == ":" and not colon_visible:
+                parts.append(_EMPTY_COLON[r])
+            else:
+                parts.append(glyph[r])
+        rows.append(" ".join(parts))
+    return "\n".join(rows)
+

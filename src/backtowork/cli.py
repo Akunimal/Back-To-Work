@@ -26,7 +26,7 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
-from .art import LOGO, battery, big_clock, bubbles_frame, spinner, wave_text
+from .art import LOGO, battery, big_clock, big_clock_animated, breathing_green, bubbles_frame, spinner, wave_text
 from .config import find_config, load_providers
 from .core import Monitor
 from .models import QuotaState, RefillEvent, Status
@@ -116,7 +116,7 @@ def _dashboard(states: dict[str, QuotaState], t: float) -> Panel:
     if reset_at is not None:
         # Big green Commodore countdown to the soonest refill.
         secs = int((reset_at - datetime.now(timezone.utc)).total_seconds())
-        hero: Text = Text(big_clock(secs), style="bold green")
+        hero: Text = Text(big_clock_animated(secs, t), style=f"bold {breathing_green(t)}")
     else:
         # No known reset (idle / available / unknown) → animated bubbles so the
         # screen is never static.
