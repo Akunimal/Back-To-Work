@@ -116,7 +116,7 @@ def _dashboard(states: dict[str, QuotaState], t: float) -> Panel:
     if reset_at is not None:
         # Big green Commodore countdown to the soonest refill.
         secs = int((reset_at - datetime.now(timezone.utc)).total_seconds())
-        hero: Text = Text(big_clock_animated(secs, t), style=f"bold {breathing_green(t)}")
+        hero: Text = Text.from_markup(big_clock_animated(secs, t))
     else:
         # No known reset (idle / available / unknown) → animated bubbles so the
         # screen is never static.

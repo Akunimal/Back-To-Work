@@ -75,11 +75,12 @@ def test_breathing_green_is_valid_rich_color():
 
 
 def test_big_clock_animated_dimensions():
-    """animated clock has same dimensions as big_clock."""
-    static = big_clock(3661)
+    """animated clock has the right number of rows."""
     animated = big_clock_animated(3661, 0.0)
-    assert len(animated.split("\n")) == len(static.split("\n"))
-    assert len(animated.split("\n")[0]) == len(static.split("\n")[0])
+    rows = animated.split("\n")
+    assert len(rows) == DIGIT_HEIGHT
+    for row in rows:
+        assert len(row) > 0
 
 
 def test_big_clock_animated_colon_blinks():
@@ -89,16 +90,14 @@ def test_big_clock_animated_colon_blinks():
     assert c_on != c_off
 
 
-def test_big_clock_animated_matches_static_when_colon_visible():
-    """When colon is visible, output matches regular big_clock (ignoring trailing space diffs)."""
-    static = big_clock(3661)
-    animated = big_clock_animated(3661, 0.0)
-    # Strip trailing whitespace per line for comparison
-    static_norm = "\n".join(line.rstrip() for line in static.split("\n"))
-    anim_norm = "\n".join(line.rstrip() for line in animated.split("\n"))
-    assert static_norm == anim_norm
+def test_big_clock_animated_is_valid_markup():
+    """Output must be parseable Rich markup (raises otherwise)."""
+    for t in (0.0, 0.5, 1.3, 2.7):
+        Text.from_markup(big_clock_animated(3661, t))
+    # Additionally, different times produce different markup (wave moves).
+    assert big_clock_animated(3661, 0.0) != big_clock_animated(3661, 1.0)
 
 
 def test_big_clock_animated_negative_seconds():
-    """Negative seconds should render as 00:00 (same as big_clock)."""
+    """Negative seconds should render as 00:00."""
     assert big_clock_animated(-1, 0.0) == big_clock_animated(0, 0.0)

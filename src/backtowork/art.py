@@ -159,51 +159,47 @@ def breathing_green(t: float) -> str:
 _EMPTY_COLON = ["   ", "   ", "   ", "   ", "   "]
 
 def big_clock_animated(seconds: int, t: float) -> str:
-    """Like big_clock but the colon blinks on/off every ~0.5s."""
+    """Big clock digits with per-character color wave + blinking colon.
+
+    Returns Rich markup so each block glyph gets its own green shade,
+    creating a travelling wave across the countdown (like the Copilot CLI
+    banner approach of per-character color roles).
+    """
     text = clock_text(seconds)
     glyphs = [_FONT.get(ch, _FONT[" "]) for ch in text]
     colon_visible = int(t * 2) % 2 == 0
+    palette = _BREATHING_GREENS
+    speed = 4.0
     rows = []
     for r in range(DIGIT_HEIGHT):
-        parts = []
+        raw_chars = []
         for ch, glyph in zip(text, glyphs):
             if ch == ":" and not colon_visible:
-                parts.append(_EMPTY_COLON[r])
+                raw_chars.extend(list(_EMPTY_COLON[r]))
             else:
-                parts.append(glyph[r])
-        rows.append(" ".join(parts))
-    return "\n".join(rows)
-
-
-# --- breathing clock effects -------------------------------------------------
-
-_BREATHING_GREENS = [
-    "green", "green3", "spring_green2", "bright_green",
-    "spring_green2", "green3",
-]
-
-
-def breathing_green(t: float) -> str:
-    """Returns a green shade that cycles smoothly frame-to-frame."""
-    return _BREATHING_GREENS[int(t * 2.5) % len(_BREATHING_GREENS)]
-
-
-# Empty colon variant so the big clock blinks
-_EMPTY_COLON = ["   ", "   ", "   ", "   ", "   "]
-
-def big_clock_animated(seconds: int, t: float) -> str:
-    """Like big_clock but the colon blinks on/off every ~0.5s."""
-    text = clock_text(seconds)
-    glyphs = [_FONT.get(ch, _FONT[" "]) for ch in text]
-    colon_visible = int(t * 2) % 2 == 0
-    rows = []
-    for r in range(DIGIT_HEIGHT):
-        parts = []
-        for ch, glyph in zip(text, glyphs):
-            if ch == ":" and not colon_visible:
-                parts.append(_EMPTY_COLON[r])
+                raw_chars.extend(list(glyph[r]))
+        # Build segments — consecutive chars with same color
+        segments = []
+        seg_text = ""
+        seg_color = ""
+        for col, ch in enumerate(raw_chars):
+            idx = int(t * speed + col) % len(palette)
+            color = palette[idx]
+            if color == seg_color:
+                seg_text += ch
             else:
-                parts.append(glyph[r])
-        rows.append(" ".join(parts))
+                if seg_text:
+                    segments.append((seg_text, seg_color))
+                seg_text = ch
+                seg_color = color
+        if seg_text:
+            segments.append((seg_text, seg_color))
+        # Render as Rich markup
+        row_parts = []
+        for seg_text, seg_color in segments:
+            if seg_text.strip():
+                row_parts.append(f"[bold {seg_color}]{seg_text}[/]")
+            else:
+                row_parts.append(seg_text)  # spaces = no markup
+        rows.append("".join(row_parts))
     return "\n".join(rows)
-
