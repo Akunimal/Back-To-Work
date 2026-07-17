@@ -38,12 +38,20 @@ def test_bubbles_frame_dimensions():
     frame = bubbles_frame(1.5, width=20, height=5)
     lines = frame.split("\n")
     assert len(lines) == 5
-    assert all(len(line) == 20 for line in lines)
+    # Strip markup to check plain-text width
+    plain_lines = [Text.from_markup(l).plain for l in lines]
+    assert all(len(l) == 20 for l in plain_lines)
 
 
 def test_bubbles_animates():
     # Different time → different frame (motion).
     assert bubbles_frame(0.0) != bubbles_frame(1.0)
+
+
+def test_bubbles_is_valid_markup():
+    """Bubbles output must be parseable Rich markup."""
+    for t in (0.0, 0.5, 1.3):
+        Text.from_markup(bubbles_frame(t, width=20, height=5))
 
 
 def test_wave_text_valid_markup_and_animates():
@@ -85,8 +93,8 @@ def test_big_clock_animated_dimensions():
 
 def test_big_clock_animated_colon_blinks():
     """Colon toggles visible/hidden across time."""
-    c_on = big_clock_animated(3661, 0.0)   # colon visible
-    c_off = big_clock_animated(3661, 0.6)  # colon hidden (~0.5s blink)
+    c_on = big_clock_animated(3661, 0.0)
+    c_off = big_clock_animated(3661, 0.6)
     assert c_on != c_off
 
 
@@ -94,7 +102,7 @@ def test_big_clock_animated_is_valid_markup():
     """Output must be parseable Rich markup (raises otherwise)."""
     for t in (0.0, 0.5, 1.3, 2.7):
         Text.from_markup(big_clock_animated(3661, t))
-    # Additionally, different times produce different markup (wave moves).
+    # Different times produce different markup (wave moves).
     assert big_clock_animated(3661, 0.0) != big_clock_animated(3661, 1.0)
 
 

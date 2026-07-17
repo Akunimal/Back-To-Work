@@ -89,8 +89,9 @@ _BUBBLE_CHARS = "·∘oO"
 
 
 def bubbles_frame(t: float, width: int = 28, height: int = 6) -> str:
-    """Animated particle system — rising bubbles with lateral sway.
-    Deterministic in 	 for smooth animation across calls."""
+    """Animated particle system — rising bubbles with lateral sway + per-char colour wave.
+    Returns Rich markup so each particle gets its own green shade,
+    creating a subtle shimmer across the bubble field."""
     grid = [[" "] * width for _ in range(height)]
     # Background mist — slow tiny dots at every column
     for col in range(width):
@@ -109,7 +110,41 @@ def bubbles_frame(t: float, width: int = 28, height: int = 6) -> str:
             cx = max(0, min(width - 1, col + sway))
             size = int((math.sin(t * 1.6 + col) + 1) * 2)  # 0..3
             grid[row][cx] = _BUBBLE_CHARS[min(size, len(_BUBBLE_CHARS) - 1)]
-    return "\n".join("".join(r) for r in grid)
+    # Convert to Rich markup with per-character green wave
+    palette = _BREATHING_GREENS
+    speed = 3.0
+    rows = []
+    for r in range(height):
+        raw = grid[r]
+        segments = []
+        seg_text = ""
+        seg_color = ""
+        for col, ch in enumerate(raw):
+            if ch == " ":
+                if seg_text:
+                    segments.append((seg_text, seg_color))
+                    seg_text = ""
+                segments.append((" ", ""))
+                continue
+            idx = int(t * speed + col + r * width) % len(palette)
+            color = palette[idx]
+            if color == seg_color:
+                seg_text += ch
+            else:
+                if seg_text:
+                    segments.append((seg_text, seg_color))
+                seg_text = ch
+                seg_color = color
+        if seg_text:
+            segments.append((seg_text, seg_color))
+        row_parts = []
+        for seg_text, seg_color in segments:
+            if seg_color:
+                row_parts.append(f"[" + seg_color + "]" + seg_text + "[/]")
+            else:
+                row_parts.append(seg_text)
+        rows.append("".join(row_parts))
+    return "\n".join(rows)
 
 
 # --- animated title shimmer (Commodore CRT vibe) -----------------------------
@@ -173,11 +208,13 @@ def big_clock_animated(seconds: int, t: float) -> str:
     rows = []
     for r in range(DIGIT_HEIGHT):
         raw_chars = []
-        for ch, glyph in zip(text, glyphs):
+        for i, (ch, glyph) in enumerate(zip(text, glyphs)):
             if ch == ":" and not colon_visible:
                 raw_chars.extend(list(_EMPTY_COLON[r]))
             else:
                 raw_chars.extend(list(glyph[r]))
+            if i < len(text) - 1:
+                raw_chars.append(" ")  # inter-glyph space (same as " ".join in big_digits)
         # Build segments — consecutive chars with same color
         segments = []
         seg_text = ""

@@ -120,7 +120,7 @@ def _dashboard(states: dict[str, QuotaState], t: float) -> Panel:
     else:
         # No known reset (idle / available / unknown) → animated bubbles so the
         # screen is never static.
-        hero = Text(bubbles_frame(t), style="green")
+        hero = Text.from_markup(bubbles_frame(t))
 
     body = Group(
         Text(""),
